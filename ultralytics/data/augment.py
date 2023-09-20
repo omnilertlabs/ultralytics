@@ -181,6 +181,108 @@ class Mosaic(BaseMixTransform):
         final_labels['img'] = img4
         return final_labels
 
+    def _mosaic4_v2(self, labels):
+        """Create a 2x2 image mosaic."""
+        mosaic_labels = []
+        s = self.imgsz
+        yc, xc = (int(random.uniform(-x, 2 * s + x)) for x in self.border)  # mosaic center x, y
+        labels_copy = deepcopy(labels)
+        partial_label_check, partial_label = self._check_partial_labels(labels_copy, xc, yc)
+        if (partial_label_check):
+            if partial_label[0] < -self.border[1]:
+                xc = max(-self.border[1], xc + (int(partial_label[0]) + self.border[1]))
+            if partial_label[2] > 2*self.imgsz + self.border[1]:
+                xc = min(2*s+self.border[1], xc + (self.imgsz - self.border[1] - int(partial_label[2])))
+            if partial_label[1] < -self.border[1]:
+                yc = max(-self.border[0], yc + (int(partial_label[1]) + self.border[0]))
+            if partial_label[3] > 2*self.imgsz + self.border[0]:
+                yc = min(2*s+self.border[0], yc + (self.imgsz - self.border[0] - int(partial_label[3])))
+        for i in range(4):
+            labels_patch = labels if i == 0 else labels['mix_labels'][i - 1]
+            
+            # Load image
+            img = labels_patch['img']
+            h, w = labels_patch.pop('resized_shape')
+            # Place img in img4
+            if i == 0:  # top left
+                result = self._check_no_labels(labels_patch)
+                if result:
+                    return labels_patch
+                img4 = np.full((s * 2, s * 2, img.shape[2]), 114, dtype=np.uint8)  # base image with 4 tiles
+                x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc  # xmin, ymin, xmax, ymax (large image)
+                x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h  # xmin, ymin, xmax, ymax (small image)
+            elif i == 1:  # top right
+                x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, s * 2), yc
+                x1b, y1b, x2b, y2b = 0, h - (y2a - y1a), min(w, x2a - x1a), h
+            elif i == 2:  # bottom left
+                x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(s * 2, yc + h)
+                x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, w, min(y2a - y1a, h)
+            elif i == 3:  # bottom right
+                x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
+                x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
+
+            img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
+            padw = x1a - x1b
+            padh = y1a - y1b
+
+            labels_patch = self._update_labels(labels_patch, padw, padh)
+            mosaic_labels.append(labels_patch)
+        final_labels = self._cat_labels(mosaic_labels)
+        final_labels['img'] = img4
+        return final_labels
+        
+    #check partial labels - Return True when partial labels are present
+    @ThreadingLocked()
+    def _check_partial_labels(self, labels, xc, yc):
+        s = self.imgsz
+        complete_labels = []
+        for i in range(4):
+            labels_patch = labels if i == 0 else labels['mix_labels'][i - 1]
+            #debug func below
+            img = labels_patch['img']
+            h, w = labels_patch['resized_shape']
+            if i == 0:  # top left
+                result = self._check_no_labels(labels_patch)
+                if result:
+                    return False, []
+                #debug func below
+                img4 = np.full((s * 2, s * 2, img.shape[2]), 114, dtype=np.uint8)  # base image with 4 tiles
+                x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc  # xmin, ymin, xmax, ymax (large image)
+                x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h  # xmin, ymin, xmax, ymax (small image)
+            elif i == 1:  # top right
+                x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, s * 2), yc
+                x1b, y1b, x2b, y2b = 0, h - (y2a - y1a), min(w, x2a - x1a), h
+            elif i == 2:  # bottom left
+                x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(s * 2, yc + h)
+                x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, w, min(y2a - y1a, h)
+            elif i == 3:  # bottom right
+                x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
+                x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
+            #debug func below
+            img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
+            padw = x1a - x1b
+            padh = y1a - y1b
+            labels_patch = self._update_labels(labels_patch, padw, padh)
+            complete_labels.append(labels_patch)
+        final_labels = self._cat_labels(complete_labels)
+        xborder1, xborder2 = self.imgsz + self.border[0], self.imgsz - self.border[0]
+        yborder1, yborder2 = self.imgsz + self.border[1], self.imgsz - self.border[1]
+        x_inb, y_inb = False, False
+        bboxes = final_labels['instances']._bboxes.bboxes
+        for n, label in enumerate(bboxes):
+            if label[0] > xborder1 and label[2] < xborder2:
+                x_inb = True
+            if label[1] > yborder1 and label[3] < yborder2:
+                y_inb = True
+            # if both x and y values are in/out of bounds, object is either completely in or out of image post-crop
+            if x_inb != y_inb and ((final_labels['cls'][n] == 0 or final_labels['cls'][n] == 3) or (0 not in final_labels['cls'] and 3 not in final_labels['cls'])):
+                return True, label
+        return False, []
+    
+    @ThreadingLocked()
+    def _check_no_labels(self, labels):
+        return (len(labels['cls']) == 0)
+
     def _mosaic9(self, labels):
         """Create a 3x3 image mosaic."""
         mosaic_labels = []
