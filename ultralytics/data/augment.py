@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import torchvision.transforms as T
 
-from ultralytics.utils import LOGGER, colorstr
+from ultralytics.utils import LOGGER, colorstr, ThreadingLocked
 from ultralytics.utils.checks import check_version
 from ultralytics.utils.instance import Instances
 from ultralytics.utils.metrics import bbox_ioa
